@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f2e9">
+  <meta name="description" content="在 WebGL 2.0 庭院中调节 Phong 光照、材质和阴影。">
+  <title>光影庭院 · 计算机图形学 AP3</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%232c4c40'/%3E%3Ccircle cx='32' cy='32' r='16' fill='none' stroke='%23f5f2e9' stroke-width='3'/%3E%3Cpath d='M20 44 44 20' stroke='%23f5f2e9' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <script src="Common/MV.js" defer></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+<main>
+  <header class="page-header">
+    <div>
+      <p class="course">计算机图形学 <span></span> AP3</p>
+      <h1>光影庭院</h1>
+      <p class="description">在同一座庭院中观察材质、反射与阴影。</p>
+    </div>
+    <button id="reset" type="button" class="outline">↺ 重置场景</button>
+  </header>
+
+  <div class="workspace">
+    <section aria-label="庭院视图与光照控制">
+      <div class="viewer" id="viewer">
+        <canvas id="scene" tabindex="0" aria-label="三维庭院。点击拾取，拖动或方向键环绕视角，滚轮或加减键缩放。"></canvas>
+        <div class="view-state">
+          <span id="mode" class="canvas-label">Phong · 全开</span>
+          <span id="selection-badge" class="canvas-label" hidden></span>
+        </div>
+        <div class="comparison" id="comparison" hidden><span>Phong</span><span>Blinn–Phong</span></div>
+        <p id="loading" class="view-message" role="status">正在加载庭院…</p>
+        <p id="error" class="view-message" role="alert" hidden></p>
+      </div>
+      <div class="caption"><span>点击拾取 · 拖动旋转 · 滚轮缩放</span><span>WebGL 2.0</span></div>
+
+      <div class="lighting">
+        <div class="lighting-heading">
+          <h2>Phong 光照</h2>
+          <div class="presets" role="group" aria-label="光照分量预设">
+            <button type="button" aria-pressed="false" data-terms="100">仅环境</button>
+            <button type="button" aria-pressed="false" data-terms="010">仅漫反射</button>
+            <button type="button" aria-pressed="false" data-terms="001">仅镜面</button>
+            <button type="button" aria-pressed="true" data-terms="111">全开</button>
+          </div>
+        </div>
+        <div class="lighting-body">
+          <fieldset>
+            <legend>光照分量</legend>
+            <label><input type="checkbox" id="ambient" checked> 环境</label>
+            <label><input type="checkbox" id="diffuse" checked> 漫反射</label>
+            <label><input type="checkbox" id="specular" checked> 镜面</label>
+          </fieldset>
+          <fieldset>
+            <legend>光源</legend>
+            <label><input type="checkbox" id="sun" checked> 方向光</label>
+            <label><input type="checkbox" id="point" checked> 点光</label>
+          </fieldset>
+        </div>
+      </div>
+    </section>
+
+    <aside aria-label="场景参数">
+      <section class="inspector">
+        <div class="section-title">
+          <h2>物体材质</h2>
+        </div>
+        <label class="select-label" for="object">当前物体</label>
+        <select id="object"><option value="0">点击场景拾取物体</option></select>
+        <fieldset class="material-controls" id="material" disabled aria-label="所选物体的材质参数">
+          <div class="color-row"><label for="color">漫反射颜色</label><input type="color" id="color" value="#ffffff"></div>
+          <div class="range-row">
+            <label for="ka">环境光强度 <output for="ka" id="ka-value">—</output></label>
+            <input type="range" id="ka" min="0" max="1" step="0.01" value="0.35">
+          </div>
+          <div class="range-row">
+            <label for="ks">镜面强度 <output for="ks" id="ks-value">—</output></label>
+            <input type="range" id="ks" min="0" max="2" step="0.01" value="0.3">
+          </div>
+          <div class="range-row">
+            <label for="gloss">高光指数 <output for="gloss" id="gloss-value">—</output></label>
+            <input type="range" id="gloss" min="1" max="160" step="1" value="42">
+          </div>
+        </fieldset>
+      </section>
+
+      <details class="inspector shadow-panel" id="shadow-panel">
+        <summary>阴影相机</summary>
+        <label class="toggle"><input type="checkbox" id="shadow" checked> 方向光阴影</label>
+        <div class="range-row">
+          <label for="extent">正交半宽 <output for="extent" id="extent-value">8.5</output></label>
+          <input type="range" id="extent" min="2" max="18" step="0.1" value="8.5">
+        </div>
+        <div class="range-row">
+          <label for="near">近裁剪面 <output for="near" id="near-value">1.0</output></label>
+          <input type="range" id="near" min="0.1" max="12" step="0.1" value="1">
+        </div>
+        <div class="range-row">
+          <label for="far">远裁剪面 <output for="far" id="far-value">28.0</output></label>
+          <input type="range" id="far" min="13" max="48" step="0.1" value="28">
+        </div>
+        <div class="range-row">
+          <label for="bias">深度偏移 <output for="bias" id="bias-value">0.0030</output></label>
+          <input type="range" id="bias" min="0" max="0.035" step="0.0001" value="0.003">
+        </div>
+        <label class="select-label" for="pcf">阴影采样</label>
+        <select id="pcf"><option value="0">单次采样</option><option value="1" selected>3 × 3 PCF</option><option value="2">5 × 5 PCF</option></select>
+      </details>
+
+      <section class="inspector effects">
+        <h2>表面与着色</h2>
+        <label class="toggle"><input type="checkbox" id="reflection" checked> 镜面球环境反射</label>
+        <label class="toggle"><input type="checkbox" id="bump" checked> 石板法线贴图</label>
+        <label class="toggle"><input type="checkbox" id="compare"> 并排比较 Phong / Blinn–Phong</label>
+      </section>
+    </aside>
+  </div>
+</main>
+</body>
+</html>
