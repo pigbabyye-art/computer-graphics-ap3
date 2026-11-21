@@ -30,6 +30,9 @@ uniform float uAmbient, uSpecular, uGloss, uReflection, uBias;
 uniform bool uSun, uPoint, uShadow, uTiled, uBump, uBlinn, uSelected, uCapture;
 uniform sampler2D uStone, uNormalMap, uDepth;
 uniform samplerCube uEnvironment;
+uniform highp samplerCubeShadow uPointDepth;
+uniform vec2 uPointClip;
+uniform bool uPointShadow;
 uniform int uPcfRadius;
 
 float shadowFactor(vec3 surfaceNormal) {
@@ -53,6 +56,20 @@ float shadowFactor(vec3 surfaceNormal) {
     }
   }
   return visibility / samples;
+}
+
+float pointVisibility(vec3 fromLight, vec3 geometricNormal) {
+  if (!uPointShadow) return 1.0;
+  vec3 axes = abs(fromLight);
+  // Perspective depth on the selected face uses its forward axis, even at a cube seam.
+  float d = max(axes.x, max(axes.y, axes.z));
+  float near = uPointClip.x, far = uPointClip.y;
+  if (d <= near || d >= far) return 1.0;
+  float incidence = clamp(dot(geometricNormal, -normalize(fromLight)), 0.0, 1.0);
+  float texelWidth = 2.0 * d / float(textureSize(uPointDepth, 0).x);
+  float biasedD = max(near, d - texelWidth * (1.0 - incidence));
+  float referenceDepth = far / (far - near) * (1.0 - near / biasedD);
+  return texture(uPointDepth, vec4(fromLight, referenceDepth));
 }
 
 vec3 directLight(vec3 n, vec3 v, vec3 l, vec3 albedo) {
@@ -85,7 +102,7 @@ void main() {
   if (uPoint) {
     vec3 delta = uPointPosition - vWorld;
     float attenuation = 1.0 / (1.0 + 0.18 * dot(delta, delta));
-    light += 1.28 * attenuation * vec3(1.0, 0.72, 0.47)
+    light += pointVisibility(-delta, geometricNormal) * 1.28 * attenuation * vec3(1.0, 0.72, 0.47)
              * directLight(n, v, normalize(delta), albedo);
   }
   if (uReflection > 0.0) {

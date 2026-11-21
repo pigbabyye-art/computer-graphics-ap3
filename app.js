@@ -5,7 +5,7 @@ const canvas = byId("scene");
 const picker = byId("object");
 const termInputs = ["ambient", "diffuse", "specular"].map(byId);
 const presetButtons = [...document.querySelectorAll("[data-terms]")];
-const toggles = ["sun", "point", "shadow", "reflection", "bump", "compare"];
+const toggles = ["sun", "point", "pointShadow", "shadow", "reflection", "bump", "compare"];
 const shadowFields = { extent: 1, near: 1, far: 1, bias: 4, pcf: null };
 const materialFields = [
   ["ka", "ambient", 2], ["ks", "specular", 2], ["gloss", "gloss", 0],
@@ -41,6 +41,7 @@ function updateLighting() {
 
 function updateOptions() {
   for (const id of toggles) settings[id] = byId(id).checked;
+  byId("pointShadow").disabled = !settings.point;
   for (const [id, precision] of Object.entries(shadowFields)) {
     settings[id] = Number(byId(id).value);
     if (precision !== null) byId(id + "-value").value = settings[id].toFixed(precision);

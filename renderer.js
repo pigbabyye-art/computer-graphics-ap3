@@ -2,9 +2,11 @@ import { linearColor, makeScene, mirrorPosition, pointPosition, sunDirection } f
 import { meshVertex, phongFragment, simpleVertex, depthFragment, pickFragment, skyVertex, skyFragment } from "./shaders.js";
 
 const SHADOW_SIZE = 1024;
+const POINT_SHADOW_SIZE = 512;
+const POINT_SHADOW_CLIP = [0.15, 18];
 const CUBE_SIZE = 256;
 const captureSettings = {
-  terms: [1, 1, 1], sun: true, point: true, shadow: true, bias: 0.003,
+  terms: [1, 1, 1], sun: true, point: true, shadow: true, pointShadow: true, bias: 0.003,
   extent: 8.5, near: 1, far: 28, pcf: 1, bump: true, reflection: false,
 };
 
@@ -49,6 +51,14 @@ function checkFramebuffer(gl, name) {
   if (status !== gl.FRAMEBUFFER_COMPLETE) throw new Error(name + " FBO: 0x" + status.toString(16));
 }
 
+function depthFramebuffer(gl) {
+  const framebuffer = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  gl.drawBuffers([gl.NONE]);
+  gl.readBuffer(gl.NONE);
+  return framebuffer;
+}
+
 function shadowTarget(gl) {
   const texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -57,25 +67,27 @@ function shadowTarget(gl) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  const framebuffer = gl.createFramebuffer();
-  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  const framebuffer = depthFramebuffer(gl);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, texture, 0);
-  gl.drawBuffers([gl.NONE]);
-  gl.readBuffer(gl.NONE);
   checkFramebuffer(gl, "Shadow");
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   return { texture, framebuffer };
 }
 
-function environmentTarget(gl) {
+function cubeTexture(gl, size, format) {
   const texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_CUBE_MAP, texture);
-  gl.texStorage2D(gl.TEXTURE_CUBE_MAP, 1, gl.RGBA8, CUBE_SIZE, CUBE_SIZE);
+  gl.texStorage2D(gl.TEXTURE_CUBE_MAP, 1, format, size, size);
   gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   for (const axis of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T, gl.TEXTURE_WRAP_R]) {
     gl.texParameteri(gl.TEXTURE_CUBE_MAP, axis, gl.CLAMP_TO_EDGE);
   }
+  return texture;
+}
+
+function environmentTarget(gl) {
+  const texture = cubeTexture(gl, CUBE_SIZE, gl.RGBA8);
   const depth = gl.createRenderbuffer();
   gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
   gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, CUBE_SIZE, CUBE_SIZE);
@@ -117,6 +129,17 @@ function lightMatrix(settings) {
   const view = lookAt(lightEye, target, [0, 1, 0]);
   const extent = settings.extent;
   return mult(ortho(-extent, extent, -extent, extent, settings.near, settings.far), view);
+}
+
+function cubeViewProjections(eye, near, far) {
+  // WebGL cubemap order: +X, -X, +Y, -Y, +Z, -Z, with matching up vectors.
+  const faces = [
+    [[1, 0, 0], [0, -1, 0]], [[-1, 0, 0], [0, -1, 0]],
+    [[0, 1, 0], [0, 0, 1]], [[0, -1, 0], [0, 0, -1]],
+    [[0, 0, 1], [0, -1, 0]], [[0, 0, -1], [0, -1, 0]],
+  ];
+  const projection = perspective(90, 1, near, far);
+  return faces.map(([direction, up]) => mult(projection, lookAt(eye, add(eye, direction), up)));
 }
 
 function viewMatrix(camera, width, height) {
@@ -164,8 +187,6 @@ export async function createRenderer(canvas) {
   }
 
   function drawDepth(lightVP) {
-    gl.bindFramebuffer(gl.FRAMEBUFFER, shadow.framebuffer);
-    gl.viewport(0, 0, SHADOW_SIZE, SHADOW_SIZE);
     gl.clear(gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.POLYGON_OFFSET_FILL);
     gl.polygonOffset(1.65, 3);
@@ -178,6 +199,29 @@ export async function createRenderer(canvas) {
       draw(part);
     }
     gl.disable(gl.POLYGON_OFFSET_FILL);
+  }
+
+  function drawSunDepth(lightVP) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, shadow.framebuffer);
+    gl.viewport(0, 0, SHADOW_SIZE, SHADOW_SIZE);
+    drawDepth(lightVP);
+  }
+
+  function capturePointDepth() {
+    const texture = cubeTexture(gl, POINT_SHADOW_SIZE, gl.DEPTH_COMPONENT24);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
+    const framebuffer = depthFramebuffer(gl);
+    gl.viewport(0, 0, POINT_SHADOW_SIZE, POINT_SHADOW_SIZE);
+    const matrices = cubeViewProjections(pointPosition, ...POINT_SHADOW_CLIP);
+    for (const [face, matrix] of matrices.entries()) {
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_CUBE_MAP_POSITIVE_X + face, texture, 0);
+      checkFramebuffer(gl, "Point shadow");
+      drawDepth(matrix);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteFramebuffer(framebuffer);
+    return texture;
   }
 
   function drawSky(view, capture) {
@@ -202,9 +246,11 @@ export async function createRenderer(canvas) {
     gl.uniform3fv(u.uEye, view.eye);
     gl.uniform3fv(u.uSunDir, sunDirection);
     gl.uniform3fv(u.uPointPosition, pointPosition);
+    gl.uniform2fv(u.uPointClip, POINT_SHADOW_CLIP);
     gl.uniform3fv(u.uTerms, settings.terms);
     gl.uniform1i(u.uSun, settings.sun);
     gl.uniform1i(u.uPoint, settings.point);
+    gl.uniform1i(u.uPointShadow, settings.pointShadow);
     gl.uniform1i(u.uShadow, settings.shadow);
     gl.uniform1i(u.uPcfRadius, settings.pcf);
     gl.uniform1i(u.uBlinn, view.blinn ?? false);
@@ -217,6 +263,7 @@ export async function createRenderer(canvas) {
       [u.uNormalMap, gl.TEXTURE_2D, normalMap],
       [u.uDepth, gl.TEXTURE_2D, shadow.texture],
       [u.uEnvironment, gl.TEXTURE_CUBE_MAP, capture ? null : environment.texture],
+      [u.uPointDepth, gl.TEXTURE_CUBE_MAP, pointDepth],
     ];
     for (const [unit, [uniform, target, texture]] of textures.entries()) {
       gl.activeTexture(gl.TEXTURE0 + unit);
@@ -239,19 +286,14 @@ export async function createRenderer(canvas) {
     }
   }
 
-  // Capture six perpendicular 90-degree views from the mirror's center.
+  // Light position and caster geometry are fixed, so all camera views share this depth map.
+  const pointDepth = capturePointDepth();
   const captureVP = lightMatrix(captureSettings);
-  drawDepth(captureVP);
-  const faces = [
-    [[1, 0, 0], [0, -1, 0]], [[-1, 0, 0], [0, -1, 0]],
-    [[0, 1, 0], [0, 0, 1]], [[0, -1, 0], [0, 0, -1]],
-    [[0, 0, 1], [0, -1, 0]], [[0, 0, -1], [0, -1, 0]],
-  ];
+  drawSunDepth(captureVP);
   gl.bindFramebuffer(gl.FRAMEBUFFER, environment.framebuffer);
   gl.viewport(0, 0, CUBE_SIZE, CUBE_SIZE);
-  const cubeProjection = perspective(90, 1, 0.10, 40);
-  for (const [i, [direction, up]] of faces.entries()) {
-    const matrix = mult(cubeProjection, lookAt(mirrorPosition, add(mirrorPosition, direction), up));
+  const mirrorViews = cubeViewProjections(mirrorPosition, 0.10, 40);
+  for (const [i, matrix] of mirrorViews.entries()) {
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_CUBE_MAP_POSITIVE_X + i, environment.texture, 0);
     checkFramebuffer(gl, "Environment");
     gl.clear(gl.DEPTH_BUFFER_BIT);
@@ -273,7 +315,7 @@ export async function createRenderer(canvas) {
       const lightVP = lightMatrix(settings);
       const lightCamera = [settings.extent, settings.near, settings.far].join("/");
       if (settings.shadow && settings.sun && previousLightCamera !== lightCamera) {
-        drawDepth(lightVP);
+        drawSunDepth(lightVP);
         previousLightCamera = lightCamera;
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
